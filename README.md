@@ -1,15 +1,17 @@
-# Contribution [#]: [Issue Title]
+# Contribution 1: Lint unused funcs
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+**Contribution Number:** 1  
+**Student:** Shamshad Ansari 
+**Issue:** https://github.com/kubernetes-sigs/cluster-api/issues/7599  
+**Status:** Phase I [Complete]
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose this issue because I want to start learning Kubernetes development through a contribution that is still connected to skills I already have. Cluster API is a large Kubernetes-related project, so I wanted an issue that would help me get familiar with the codebase without needing very deep Kubernetes knowledge right away.
+
+This issue stood out to me because it is mainly about Go linting and code quality. I have worked on a project in Go before, so I feel comfortable reading Go code and learning more about Go tooling. I also think this is a useful issue because unused functions can make a codebase harder to maintain. Through this contribution, I hope to learn more about how large open-source Go projects use linters, static analysis, and CI checks to keep their code clean.
 
 ---
 
@@ -17,19 +19,19 @@
 
 ### Problem Description
 
-[In your own words, what's broken or missing?]
+The issue is asking for a linter or linting setup that can detect unused functions in the Cluster API codebase. Some unused code was previously found manually, and the maintainers want a better way to catch this automatically in the future. The issue mentions two cases: functions that are not used anywhere, and functions that are only used by test code. The first case seems easier to detect, while the second may be harder because it could create false positives.
 
 ### Expected Behavior
 
-[What should happen?]
+The project should have a linting check that can detect functions that are not used anywhere in the codebase. This would help contributors catch unused code earlier before it stays in the project or reaches a pull request.
 
 ### Current Behavior
 
-[What actually happens?]
+Right now, unused functions may not always be caught automatically. In the example from the issue, unused code was found and removed manually. This means the project may still need better tooling to detect this kind of problem consistently.
 
 ### Affected Components
 
-[Which parts of the codebase are involved?]
+The main affected components are the Go source code and the project’s linting/static analysis setup. This likely involves the repository’s lint configuration and any CI or developer workflow that runs lint checks. The issue also specifically mentions unused code found in the KCP, or Kubeadm Control Plane, area, so that part of the codebase is relevant too.
 
 ---
 
