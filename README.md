@@ -39,19 +39,44 @@ The main affected components are the Go source code and the project’s linting/
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+Working on branch `issue-7599` of the `kubernetes-sigs/cluster-api` fork.
+
+The project requires Go 1.26, which was already installed. No additional setup was necessary beyond cloning the repository, as `go run` automatically downloads the `deadcode` tool when invoked.
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. **Confirm the existing linter does not catch the issue**
+
+   The project already has the `unused` linter enabled in `.golangci.yml`. However, it does not flag exported functions in `internal/` packages when those functions are only referenced from test files.
+
+   For example, `InjectTestManagementCluster` in `controlplane/kubeadm/internal/control_plane.go:421` is production code that is only called from approximately 30 test files, yet the existing linter does not report it.
+
+2. **Run `deadcode` manually to identify unused production code**
+
+   ```bash
+   go run golang.org/x/tools/cmd/deadcode@latest \
+     . ./controlplane/kubeadm/... ./bootstrap/kubeadm/... ./cmd/...
+   ```
+
+3. **Observed result**
+
+   The tool reported **565 unreachable functions**.
+
+   After filtering out test code and fake implementations, several examples of unused production code remained, including:
+
+   * `controlplane/kubeadm/internal/etcd/util/util.go:67` — `MemberEqual`, an exported function whose only caller is a single test file.
+   * `internal/contract/bootstrap.go:63` — `BootstrapContract.FailureReason`, a deprecated accessor with no production callers.
+   * `internal/contract/controlplane.go:198` — `ControlPlaneContract.FailureReason`, a deprecated accessor with no production callers.
+
+   Running the same analysis with the `-test` flag confirmed that these standalone functions remain unreachable even when test packages are treated as entry points.
+
+   For exported methods on instantiated types (for example, `InjectTestManagementCluster`), `deadcode` cannot reliably detect test-only usage due to a known limitation of its Rapid Type Analysis (RTA) algorithm. The analysis conservatively treats all methods on instantiated types as reachable.
 
 ### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+* **Commit showing reproduction:**  N/A — reproduction is a manual tool invocation, no code change required
+* **Screenshots/logs:** See observed result above (565 unreachable functions reported by deadcode, filtered examples shown)
+* **My findings:** The issue is confirmed. The `deadcode` tool from `golang.org/x/tools/cmd/deadcode` successfully detects Case 1 (functions that are never called by anyone) and is not currently integrated into the project's tooling. Case 2 (functions that are only called from test code) cannot be reliably detected by `deadcode` for methods on instantiated types because of limitations in its RTA-based reachability analysis. Detecting those cases would likely require a custom AST- or grep-based analysis. Integrating `deadcode` into the project's Makefile or CI workflow would provide a permanent mechanism for detecting unused production code.
 
 ---
 
