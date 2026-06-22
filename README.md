@@ -153,16 +153,16 @@ Reproduced the issue and learned why the existing `unused` linter is insufficien
 
 ### Week 2 Progress
 
-Built the refined recipe (`-test -tags=e2e -filter 'internal/'` under an ephemeral `go.work`), which isolated exactly 6 dead functions. Deleted the 6 dead functions in `internal/contract/controlplane.go` and `controlplane_template.go`, confirmed `go build`, `go vet`, and `go test ./internal/contract/...` all pass, and opened the small cleanup PR (#13826).
+Reproduction completed: built the refined recipe (`-test -tags=e2e -filter 'internal/'` under an ephemeral `go.work`), which isolated exactly 6 dead functions in `internal/contract`. Confirmed `internal/**` as a zero-false-positive scope and verified the result was reproducible across runs.
 
 ### Week 3 Progress
 
-Built the `verify-deadcode` gate: added the pinned `deadcode` tool (`v0.45.0`) and build rule to the Makefile, wrote `hack/verify-deadcode.sh` (ephemeral `go.work`, `-test -tags=e2e`, filtered to `internal/`, excludes `_test.go` and `/fake/`), and registered `deadcode` in `ALL_VERIFY_CHECKS`. Per the maintainer-policy reasoning, kept this as a separate branch (`feature/verify-deadcode`) rather than bundling it with the cleanup PR. The cleanup PR was merged and the gate PR was opened as a follow-up the same day. Currently waiting on maintainer feedback on the gate PR, and using the time to look for a few more issues to pick up in the meantime.
+Moved from reproduction to PRs. Deleted the 6 dead functions in `internal/contract/controlplane.go` and `controlplane_template.go`, confirmed `go build`, `go vet`, and `go test ./internal/contract/...` all pass, and opened the cleanup PR (#13826) — merged June 19. Then built the `verify-deadcode` gate: added the pinned `deadcode` tool (`v0.45.0`) and build rule to the Makefile, wrote `hack/verify-deadcode.sh` (ephemeral `go.work`, `-test -tags=e2e`, filtered to `internal/`, excludes `_test.go` and `/fake/`), and registered `deadcode` in `ALL_VERIFY_CHECKS`. Per the maintainer-policy reasoning, kept this on a separate branch (`feature/verify-deadcode`) rather than bundling it with the cleanup, and opened the gate PR (#13831) the same day. Currently waiting on maintainer feedback on the gate PR, and using the time to look for a few more issues to pick up in the meantime.
 
 ### Code Changes
 
 - **Files modified (cleanup, merged):** `internal/contract/controlplane.go` (−26), `internal/contract/controlplane_template.go` (−21) — 47 lines / 6 functions removed.
-- **Files added/modified (gate, drafted):** `hack/verify-deadcode.sh` (new, 69 lines), `Makefile` (+17: `DEADCODE_VER`/build rule/`verify-deadcode` target, `deadcode` added to `ALL_VERIFY_CHECKS`).
+- **Files added/modified (gate, opened):** `hack/verify-deadcode.sh` (new, 69 lines), `Makefile` (+17: `DEADCODE_VER`/build rule/`verify-deadcode` target, `deadcode` added to `ALL_VERIFY_CHECKS`).
 - **Key commits:** `ea7a7bcc` (cleanup), `6b81770e` (gate).
 - **Approach decisions:**
   1. Scope the gate to `internal/**` to guarantee zero false positives.
@@ -196,6 +196,7 @@ Built the `verify-deadcode` gate: added the pinned `deadcode` tool (`v0.45.0`) a
 
 **Maintainer Feedback:**
 - **June 19:** Opened the gate PR as a follow-up after the maintainer's reply on the CI-gate question and the cleanup merge.
+- *[Next date]*: *[summary of review feedback received]*
 
 **Status:** Opened (June 19), awaiting review. Meanwhile, looking for a few more issues to pick up.
 
