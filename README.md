@@ -1,9 +1,8 @@
-# Contribution 1: Lint unused funcs
+# Contribution 1: Lint Unused Funcs
 
-**Contribution Number:** 1  
-**Student:** Shamshad Ansari 
-**Issue:** https://github.com/kubernetes-sigs/cluster-api/issues/7599  
-**Status:** Phase I [Complete]
+- **Student:** Shamshad Ansari
+- **Issue:** [kubernetes-sigs/cluster-api#7599](https://github.com/kubernetes-sigs/cluster-api/issues/7599)
+- **Status:** Phase I - IV **[Complete]** — cleanup PR [#13826](https://github.com/kubernetes-sigs/cluster-api/pull/13826) merged (June 19); gate PR opened (June 19) on branch `feature/verify-deadcode`, awaiting maintainer review
 
 ---
 
@@ -23,15 +22,15 @@ The issue is asking for a linter or linting setup that can detect unused functio
 
 ### Expected Behavior
 
-The project should have a linting check that can detect functions that are not used anywhere in the codebase. This would help contributors catch unused code earlier before it stays in the project or reaches a pull request.
+The project should have a linting check that can detect functions that are not used anywhere in the codebase. This would help contributors catch unused code earlier — before it stays in the project or reaches a pull request.
 
 ### Current Behavior
 
-Right now, unused functions may not always be caught automatically. In the example from the issue, unused code was found and removed manually. This means the project may still need better tooling to detect this kind of problem consistently.
+Right now, unused functions may not always be caught automatically. The `unused` linter is already enabled in `.golangci.yml`, but it only flags unexported, in-package symbols — it does not catch exported functions or functions that are only referenced from test files. In the example from the issue, unused code was found and removed manually. This means the project still needs better tooling to detect this kind of problem consistently.
 
 ### Affected Components
 
-The main affected components are the Go source code and the project’s linting/static analysis setup. This likely involves the repository’s lint configuration and any CI or developer workflow that runs lint checks. The issue also specifically mentions unused code found in the KCP, or Kubeadm Control Plane, area, so that part of the codebase is relevant too.
+The main affected components are the Go source code and the project's linting/static analysis setup. This involves the repository's lint configuration (`.golangci.yml`), the Makefile verify targets, and the developer/CI workflow that runs lint checks. The issue also specifically mentions unused code found in the KCP (Kubeadm Control Plane) area, so that part of the codebase is relevant too. In practice, the genuinely-dead functions I found lived in `internal/contract`.
 
 ---
 
@@ -39,17 +38,16 @@ The main affected components are the Go source code and the project’s linting/
 
 ### Environment Setup
 
-Working on branch `issue-7599` of the `kubernetes-sigs/cluster-api` fork.
+Working on branch `issue-7599` of the `kubernetes-sigs/cluster-api` fork (cleanup), and `feature/verify-deadcode` (the verify gate).
 
 The project requires Go 1.26, which was already installed. No additional setup was necessary beyond cloning the repository, as `go run` automatically downloads the `deadcode` tool when invoked.
+
+A key environmental detail: the repository is three separate Go modules (`.`, `test/`, `hack/tools/`) with no committed `go.work`. Cross-module usage must be made visible to whole-program analysis, otherwise functions used only by the `test/` module look dead.
 
 ### Steps to Reproduce
 
 1. **Confirm the existing linter does not catch the issue**
-
-   The project already has the `unused` linter enabled in `.golangci.yml`. However, it does not flag exported functions in `internal/` packages when those functions are only referenced from test files.
-
-   For example, `InjectTestManagementCluster` in `controlplane/kubeadm/internal/control_plane.go:421` is production code that is only called from approximately 30 test files, yet the existing linter does not report it.
+   The `unused` linter is already enabled in `.golangci.yml`, but it does not flag exported functions in `internal/` packages, nor functions only referenced from test files. For example, `InjectTestManagementCluster` in `controlplane/kubeadm/internal/control_plane.go` is production code called only from test files, yet the existing linter does not report it.
 
 2. **Run `deadcode` manually to identify unused production code**
 
@@ -59,24 +57,29 @@ The project requires Go 1.26, which was already installed. No additional setup w
    ```
 
 3. **Observed result**
+   A naive whole-repo run reports hundreds of "unreachable" functions, but most are false positives: exported API consumed by downstream provider repositories, or functions used only by the separate `test/` module that the run could not see. Filtering these out left a small set of real candidates in `internal/contract`.
 
-   The tool reported **565 unreachable functions**.
+4. **Refine to a zero-false-positive subset**
+   Because Go forbids importing `internal/**` from outside the module tree, anything unreachable under `internal/` is genuinely dead. Spanning all three modules with an ephemeral workspace and building the e2e test binary (`-tags=e2e`) yields a clean, reproducible result:
 
-   After filtering out test code and fake implementations, several examples of unused production code remained, including:
+   ```bash
+   go work init && go work use . ./test ./hack/tools   # ephemeral; go.work is gitignored
+   deadcode -test -tags=e2e \
+     -filter 'sigs.k8s.io/cluster-api/internal/' \
+     sigs.k8s.io/cluster-api/... sigs.k8s.io/cluster-api/test/...
+   ```
 
-   * `controlplane/kubeadm/internal/etcd/util/util.go:67` — `MemberEqual`, an exported function whose only caller is a single test file.
-   * `internal/contract/bootstrap.go:63` — `BootstrapContract.FailureReason`, a deprecated accessor with no production callers.
-   * `internal/contract/controlplane.go:198` — `ControlPlaneContract.FailureReason`, a deprecated accessor with no production callers.
+   This reports exactly **6 genuinely dead functions**, all in `internal/contract`:
+   - `controlplane.go`: `ControlPlaneContract.FailureReason`, `FailureMessage`, `ExternalManagedControlPlane`
+   - `controlplane_template.go`: `ControlPlaneTemplateMachineTemplate.NodeDrainTimeout`, `NodeVolumeDetachTimeout`, `NodeDeletionTimeout`
 
-   Running the same analysis with the `-test` flag confirmed that these standalone functions remain unreachable even when test packages are treated as entry points.
-
-   For exported methods on instantiated types (for example, `InjectTestManagementCluster`), `deadcode` cannot reliably detect test-only usage due to a known limitation of its Rapid Type Analysis (RTA) algorithm. The analysis conservatively treats all methods on instantiated types as reachable.
+   These are leftover copies/variants whose sibling types (`Bootstrap` / `InfraMachine` / `InfraCluster`) have live, tested equivalents.
 
 ### Reproduction Evidence
 
-* **Commit showing reproduction:**  N/A — reproduction is a manual tool invocation, no code change required
-* **Screenshots/logs:** See observed result above (565 unreachable functions reported by deadcode, filtered examples shown)
-* **My findings:** The issue is confirmed. The `deadcode` tool from `golang.org/x/tools/cmd/deadcode` successfully detects Case 1 (functions that are never called by anyone) and is not currently integrated into the project's tooling. Case 2 (functions that are only called from test code) cannot be reliably detected by `deadcode` for methods on instantiated types because of limitations in its RTA-based reachability analysis. Detecting those cases would likely require a custom AST- or grep-based analysis. Integrating `deadcode` into the project's Makefile or CI workflow would provide a permanent mechanism for detecting unused production code.
+- **Commit showing reproduction:** N/A — reproduction is a manual tool invocation, no code change required.
+- **Screenshots/logs:** See observed result above (6 dead functions under `internal/` after refinement; hundreds of cross-module/downstream false positives on a naive run).
+- **My findings:** The issue is confirmed. `deadcode` (`golang.org/x/tools/cmd/deadcode`) reliably detects Case 1 (functions never called by anyone) and is not currently integrated into the project's tooling. Case 2 (functions called only from test code) cannot be reliably detected for methods on instantiated types (e.g. `InjectTestManagementCluster`) because of a known limitation of `deadcode`'s Rapid Type Analysis (RTA): it conservatively treats all methods on instantiated types as reachable. Standalone test-only functions, however, are detected. A scope restricted to `internal/**` is the achievable zero-false-positive target, since `internal/` cannot be imported by downstream repos.
 
 ---
 
@@ -84,30 +87,42 @@ The project requires Go 1.26, which was already installed. No additional setup w
 
 ### Analysis
 
-[Your analysis of the root cause - what's causing the issue?]
+There are two distinct problems, and they have different root causes:
+
+1. **The dead code itself** — six accessor methods in `internal/contract` were copied/templated from sibling contracts but never wired up or tested. They are harmless but add maintenance noise. Root cause: copy-paste during contract scaffolding, with no automated check to catch the leftovers.
+2. **The missing check** — the existing `unused` linter is in-package only, so exported/test-only-used and cross-module-dead functions slip through. Root cause: no whole-program reachability analysis runs in the project's workflow.
 
 ### Proposed Solution
 
-[High-level description of your fix approach]
+Split the work into two independent, low-coupling pieces:
+
+1. **Cleanup PR** — delete the 6 confirmed dead functions. Small, obvious, low-risk.
+2. **Verify gate** — add `make verify-deadcode`, a whole-program reachability check scoped to `internal/**` so it produces zero false positives, wired into `ALL_VERIFY_CHECKS` so it can run locally and in CI.
+
+Keeping them separate matters: the cleanup is an obvious win that can merge immediately, while a hard CI gate that fails everyone's push is a maintainer policy decision (CI cost, build tags, staged code), which `CONTRIBUTING.md` says should be discussed first.
 
 ### Implementation Plan
 
-Using UMPIRE framework (adapted):
+Using the UMPIRE framework (adapted):
 
-**Understand:** [Restate the problem]
+**Understand:** Detect functions that are never used (Case 1) and ideally those used only by tests (Case 2). The existing `unused` linter misses exported and cross-module-dead functions; a whole-program tool is required.
 
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Match:** The repo already has the `unused` linter (in-package only) and a well-established `verify-*` pattern in the Makefile (e.g. `verify-licenses`, `verify-modules`) backed by scripts under `hack/`, each built as a pinned tool via `GO_INSTALL`. The fix follows this exact pattern rather than inventing a new one.
 
-**Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
+**Plan:**
+1. Identify the genuinely-dead functions with a refined `deadcode` recipe scoped to `internal/`.
+2. Delete those 6 functions (cleanup PR) in `internal/contract/controlplane.go` and `controlplane_template.go`.
+3. Add a pinned `deadcode` tool (`DEADCODE_VER := v0.45.0`) and a `$(DEADCODE)` build rule in the Makefile, mirroring the other tools.
+4. Add `hack/verify-deadcode.sh` that builds an ephemeral `go.work`, runs `deadcode -test -tags=e2e` filtered to `internal/`, excludes `_test.go` and `/fake/`, and exits non-zero on findings.
+5. Register `deadcode` in `ALL_VERIFY_CHECKS` and add the `verify-deadcode` target.
 
-**Implement:** [Link to your branch/commits as you work]
+**Implement:**
+- Cleanup: branch `issue-7599`, commit `ea7a7bcc` (🌱 Remove unused functions in internal/contract).
+- Gate: branch `feature/verify-deadcode`, commit `6b81770e` (✨ Add make verify-deadcode).
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Review:** Follows the existing `verify-*` Makefile/hack convention; pinned tool version; gitmoji commit style; DCO sign-off present; no stray analysis artifacts committed; cleanup kept separate from the policy-sensitive gate.
 
-**Evaluate:** [How will you verify it works?]
+**Evaluate:** Round-trip test — with the dead functions present, `make verify-deadcode` fails (exit 1) listing exactly the 6; with them deleted, it passes. `go build ./...`, `go vet`, and `go test ./internal/contract/...` all green after deletion.
 
 ---
 
@@ -115,50 +130,74 @@ Using UMPIRE framework (adapted):
 
 ### Unit Tests
 
-- [ ] Test case 1: [Description]
-- [ ] Test case 2: [Description]
-- [ ] Test case 3: [Description]
+- [x] Test case 1: `go test ./internal/contract/...` passes after deleting the 6 functions (confirms nothing in-package depended on them).
+- [x] Test case 2: `go build ./...` succeeds (no production caller anywhere in the main module).
+- [x] Test case 3: `go vet ./...` clean.
 
 ### Integration Tests
 
-- [ ] Integration scenario 1
-- [ ] Integration scenario 2
+- [x] Round-trip gate test: functions present → `make verify-deadcode` exits 1 and lists exactly the 6 dead functions; functions deleted → exits 0 ("PASS").
+- [x] Cross-module visibility: the ephemeral `go.work` spans `.`, `test/`, and `hack/tools/`, and `-tags=e2e` builds the build-tagged e2e suite, so functions used only by other modules/tests are correctly counted as reachable (no false positives).
 
 ### Manual Testing
 
-[What you tested manually and results]
+Ran the refined `deadcode` recipe by hand and verified the temp `GOWORK` file is cleaned up by the trap and never modifies the working tree (`go.work` stays gitignored). Confirmed the merged cleanup did not regress any KCP/controlplane tests.
 
 ---
 
 ## Implementation Notes
 
-### Week [X] Progress
+### Week 1 Progress
 
-[What you built this week, challenges faced, decisions made]
+Reproduced the issue and learned why the existing `unused` linter is insufficient (in-package only). Discovered the three-module layout is the main source of false positives, and that `deadcode`'s RTA cannot detect test-only usage for methods on instantiated types (Case 2 limitation). Established `internal/**` as the only zero-false-positive scope.
 
-### Week [Y] Progress
+### Week 2 Progress
 
-[Continue documenting as you work]
+Built the refined recipe (`-test -tags=e2e -filter 'internal/'` under an ephemeral `go.work`), which isolated exactly 6 dead functions. Deleted the 6 dead functions in `internal/contract/controlplane.go` and `controlplane_template.go`, confirmed `go build`, `go vet`, and `go test ./internal/contract/...` all pass, and opened the small cleanup PR (#13826).
+
+### Week 3 Progress
+
+Built the `verify-deadcode` gate: added the pinned `deadcode` tool (`v0.45.0`) and build rule to the Makefile, wrote `hack/verify-deadcode.sh` (ephemeral `go.work`, `-test -tags=e2e`, filtered to `internal/`, excludes `_test.go` and `/fake/`), and registered `deadcode` in `ALL_VERIFY_CHECKS`. Per the maintainer-policy reasoning, kept this as a separate branch (`feature/verify-deadcode`) rather than bundling it with the cleanup PR. The cleanup PR was merged and the gate PR was opened as a follow-up the same day. Currently waiting on maintainer feedback on the gate PR, and using the time to look for a few more issues to pick up in the meantime.
 
 ### Code Changes
 
-- **Files modified:** [List]
-- **Key commits:** [Links to important commits]
-- **Approach decisions:** [Why you chose certain approaches]
+- **Files modified (cleanup, merged):** `internal/contract/controlplane.go` (−26), `internal/contract/controlplane_template.go` (−21) — 47 lines / 6 functions removed.
+- **Files added/modified (gate, drafted):** `hack/verify-deadcode.sh` (new, 69 lines), `Makefile` (+17: `DEADCODE_VER`/build rule/`verify-deadcode` target, `deadcode` added to `ALL_VERIFY_CHECKS`).
+- **Key commits:** `ea7a7bcc` (cleanup), `6b81770e` (gate).
+- **Approach decisions:**
+  1. Scope the gate to `internal/**` to guarantee zero false positives.
+  2. Use an ephemeral temp-`GOWORK` workspace + trap cleanup so the tree is never mutated.
+  3. Split cleanup from the gate because a hard CI gate is a maintainer policy call.
+  4. Pin `deadcode` at `v0.45.0` and reuse the existing `verify-*` tooling pattern.
 
 ---
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
+### Cleanup PR
 
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Link:** [#13826](https://github.com/kubernetes-sigs/cluster-api/pull/13826) (cleanup)
+
+**PR Description (cleanup):** Removes six unused functions in `internal/contract` (`ControlPlaneContract.FailureReason`/`FailureMessage`/`ExternalManagedControlPlane` and the `ControlPlaneTemplateMachineTemplate` `Node*Timeout` accessors), identified via `deadcode` whole-program analysis scoped to `internal/`. Part of #7599. `go build`, `go vet`, and `go test ./internal/contract/...` all pass.
 
 **Maintainer Feedback:**
-- [Date]: [Summary of feedback received]
-- [Date]: [How you addressed it]
+- **June 18:** Opened the cleanup PR (#13826) and raised the open question on the issue — whether a follow-up `deadcode` check should be a hard CI gate or run advisory-only.
+- **June 19:** Maintainer responded to the open question and merged the cleanup PR. I followed up by opening the CI gate PR the same day.
 
-**Status:** [Awaiting review / Iterating / Approved / Merged]
+**Status:** Cleanup PR (#13826) **Merged** (June 19).
+
+---
+
+### Gate PR
+
+**PR Link:** [#13831](https://github.com/kubernetes-sigs/cluster-api/pull/13831) — branch `feature/verify-deadcode`, commit `6b81770e`.
+
+**PR Description (gate):** Adds `make verify-deadcode`, a whole-program reachability check that fails when any function under `internal/**` is unreachable from both the manager binary and every test. Adds a pinned `deadcode` tool (`v0.45.0`) and build rule to the Makefile, a new `hack/verify-deadcode.sh`, and registers `deadcode` in `ALL_VERIFY_CHECKS`. Scoped to `internal/**` because that tree cannot be imported by downstream provider repos, so "unreachable" there provably means "dead" — yielding zero false positives. Part of #7599; complements the merged cleanup (#13826).
+
+**Maintainer Feedback:**
+- **June 19:** Opened the gate PR as a follow-up after the maintainer's reply on the CI-gate question and the cleanup merge.
+
+**Status:** Opened (June 19), awaiting review. Meanwhile, looking for a few more issues to pick up.
 
 ---
 
@@ -166,20 +205,23 @@ Using UMPIRE framework (adapted):
 
 ### Technical Skills Gained
 
-[What you learned technically]
+- How whole-program reachability analysis (`deadcode`) differs from in-package linters (`unused`), and where RTA breaks down (methods on instantiated types).
+- Go multi-module workspaces (`go work`) and why they matter for cross-module analysis.
+- How a large project structures pinned dev tools and `verify-*` checks in its Makefile/hack scripts, plus Kubernetes contribution mechanics (DCO sign-off, CLA, gitmoji commits).
 
 ### Challenges Overcome
 
-[What was hard and how you solved it]
+The biggest challenge was the flood of false positives on a naive run. I traced this to the three-module layout and to downstream consumers of exported APIs, then reasoned my way to the `internal/**`-only scope — the one place where "unreachable" provably means "dead." Getting the e2e-tagged suite included (`-tags=e2e`) was the final piece that eliminated the remaining false positives.
 
 ### What I'd Do Differently Next Time
 
-[Reflection on your process]
+I'd reach for the module-scope reasoning sooner instead of trying to filter a noisy whole-repo run, and I'd open the discussion issue/comment about the CI gate earlier, in parallel with the cleanup, so the policy conversation could progress while the obvious win merged.
 
 ---
 
 ## Resources Used
 
-- [Link to helpful documentation]
-- [Tutorial or Stack Overflow post that helped]
-- [GitHub issues or discussions that helped]
+- `golang.org/x/tools/cmd/deadcode` documentation and the RTA reachability notes.
+- Cluster API `CONTRIBUTING.md` (discussion-before-infra guidance) and the existing `verify-*` targets in the Makefile as a pattern reference.
+- Go workspaces reference (`go work`) for spanning the three modules.
+- GitHub issue [#7599](https://github.com/kubernetes-sigs/cluster-api/issues/7599) and the linked manual-removal example.
