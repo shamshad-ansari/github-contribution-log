@@ -226,3 +226,99 @@ I'd reach for the module-scope reasoning sooner instead of trying to filter a no
 - Cluster API `CONTRIBUTING.md` (discussion-before-infra guidance) and the existing `verify-*` targets in the Makefile as a pattern reference.
 - Go workspaces reference (`go work`) for spanning the three modules.
 - GitHub issue [#7599](https://github.com/kubernetes-sigs/cluster-api/issues/7599) and the linked manual-removal example.
+
+
+# Contribution 2: Add `maxRetry` to `MachineDeployment` `RemediationStrategy`
+
+- **Student:** Shamshad Ansari
+- **Issue:** kubernetes-sigs/cluster-api#12553
+- **Status:** Planning *(In Progress)* — branch `issue-12553-md-maxretry` created from `upstream/main`; implementation plan written and reviewed; code not yet written.
+
+---
+
+## Why I Chose This Issue
+
+After finishing the `lint/unused-funcs` contribution, I wanted to move from tooling and CI into the project's reconciliation logic. I compared several `help wanted` issues (#12553, #12187, #13591, and #12154) and selected this one because it was the best scoped.
+
+It has:
+
+- A clear implementation precedent (`KubeadmControlPlane` already implements the same `maxRetry` concept).
+- A bounded implementation scope (one field group on one API type and one controller).
+- A well-defined acceptance criterion (feature parity with KCP's `maxRetry`, `retryPeriodSeconds`, and `minHealthyPeriodSeconds`).
+
+It also pushed me into a part of the Cluster API codebase I had not worked on before—the `MachineSet`/`MachineDeployment` remediation path—and required me to understand how conversion webhooks, generated deepcopy code, and CRD generation fit together, rather than simply adding a new API field.
+
+---
+
+## Understanding the Issue
+
+### Problem Description
+
+`KubeadmControlPlane` already supports `remediationStrategy.maxRetry` (along with `retryPeriodSeconds` and `minHealthyPeriodSeconds`) to prevent infinite remediation loops. For example, if a control-plane machine repeatedly fails to bootstrap because of a quota issue, `MachineHealthCheck` would otherwise continue deleting and recreating it indefinitely.
+
+`MachineDeployment` has no equivalent mechanism. Its `spec.strategy.remediation` currently supports only `maxInFlight`, which limits concurrent remediation but does not cap the total number of remediation attempts over time.
+
+The issue requests adding the same `maxRetry` concept to `MachineDeployment` to achieve feature parity with `KubeadmControlPlane`.
+
+---
+
+### Expected Behavior
+
+A `MachineDeployment` should support:
+
+```yaml
+spec:
+  strategy:
+    remediation:
+      maxRetry: <int>
+```
+
+Once a `MachineSet` has retried remediation `maxRetry` times within the configured time window, the controller should stop automatic remediation and wait for external intervention (for example, an operator fixing the underlying infrastructure issue) instead of continuously deleting and recreating machines.
+
+---
+
+### Current Behavior
+
+Currently, `MachineDeploymentRemediationSpec` exposes only `MaxInFlight`, which limits the number of unhealthy machines being remediated concurrently during a reconcile.
+
+It does **not** limit how many times remediation may occur over time.
+
+As a result, if a `MachineSet` references a persistently broken machine template (for example, an invalid AMI, broken bootstrap configuration, or exhausted cloud quota), `MachineHealthCheck` continually marks machines unhealthy, the controller remediates them, the replacements fail again, and the cycle repeats indefinitely.
+
+`KubeadmControlPlane` prevents this using a per-machine-lineage retry counter.
+
+`MachineDeployment` cannot directly reuse that approach because `MachineSet` remediation has no persistent one-to-one lineage between deleted and replacement machines. During `reconcileUnhealthyMachines`, unhealthy machines are deleted in batches without maintaining a direct relationship between an old machine and its replacement.
+
+---
+
+### Affected Components
+
+The primary components affected are the `MachineDeployment` and `MachineSet` APIs, along with the `MachineSet` controller's remediation logic.
+
+Specifically, the implementation is expected to touch:
+
+- `api/core/v1beta2/machinedeployment_types.go`
+  - Add `MaxRetry`
+  - Add `RetryPeriodSeconds`
+  - Add `MinHealthyPeriodSeconds`
+
+- `api/core/v1beta2/machineset_types.go`
+  - Add an internal annotation used to persist per-`MachineSet` remediation state.
+
+- `webhooks/conversion/machinedeployment.go`
+  - Preserve the new v1beta2-only fields during v1beta1 conversion using the existing annotation restoration mechanism.
+
+- `internal/controllers/machineset/machineset_controller.go`
+  - Extend `reconcileUnhealthyMachines()`.
+
+- `internal/controllers/machineset/machineset_remediation.go` *(new file)*
+  - Mirror KCP's `checkRetryLimits()` implementation found in:
+    `controlplane/kubeadm/internal/controllers/remediation.go`
+
+Additional generated artifacts will also require updates, including:
+
+- CRD manifests
+- `zz_generated.deepcopy.go`
+- Generated CRD documentation
+- Controller tests
+- Conversion tests
